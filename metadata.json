@@ -1,0 +1,5 @@
+{
+  "name": "Lo-Fi Flight Focus",
+  "description": "A healing flight simulation timer with ambient white noise and real-time path tracking from Taipei.",
+  "requestFramePermissions": []
+}
