@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { FlightStatus } from '../types';
+
+import React from 'react';
+import { FlightStatus, Airport } from '../types';
 import { STEP_MINUTES } from '../constants';
 
 interface ControlPanelProps {
@@ -10,102 +11,15 @@ interface ControlPanelProps {
   onPause: () => void;
   onReset: () => void;
   onAdjustTime: (minutes: number) => void;
-  destinationCode: string | null;
+  destination: Airport | null;
 }
 
-const formatTime = (seconds: number) => {
+const formatTimeDigits = (seconds: number) => {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-};
-
-// Animated Time Component
-const AnimatedTimeDisplay: React.FC<{ timeLeft: number; isFlying: boolean }> = ({ timeLeft, isFlying }) => {
-  const [displayTime, setDisplayTime] = useState(formatTime(timeLeft));
-  const [animatingTime, setAnimatingTime] = useState<string | null>(null);
-  const [animationClass, setAnimationClass] = useState('');
-  const prevTimeLeftRef = useRef(timeLeft);
-
-  useEffect(() => {
-    const diff = timeLeft - prevTimeLeftRef.current;
-    
-    // Only animate on significant changes (manual adjustment > 1 second), ignoring timer ticks
-    if (Math.abs(diff) > 1) {
-      const direction = diff > 0 ? 'up' : 'down';
-      const prevStr = formatTime(prevTimeLeftRef.current);
-      const newStr = formatTime(timeLeft);
-
-      setAnimatingTime(prevStr);
-      setDisplayTime(newStr);
-      
-      // Set Slide Classes
-      // If adding time (UP): Old slides UP/Out, New slides UP/In
-      // If subtracting time (DOWN): Old slides DOWN/Out, New slides DOWN/In
-      setAnimationClass(direction === 'up' ? 'slide-up' : 'slide-down');
-
-      const timer = setTimeout(() => {
-        setAnimatingTime(null);
-        setAnimationClass('');
-      }, 250); // Match animation duration
-
-      prevTimeLeftRef.current = timeLeft;
-      return () => clearTimeout(timer);
-    } else {
-      // Normal tick, just update
-      setDisplayTime(formatTime(timeLeft));
-      prevTimeLeftRef.current = timeLeft;
-    }
-  }, [timeLeft]);
-
-  return (
-    <div className={`relative h-20 overflow-hidden flex items-center justify-center min-w-[240px] ${isFlying ? 'text-[#EDEDED]' : 'text-[#757575]'}`}>
-      <style>{`
-        .slide-up-enter { animation: slideUpEnter 0.25s ease-out forwards; }
-        .slide-up-exit { animation: slideUpExit 0.25s ease-out forwards; }
-        .slide-down-enter { animation: slideDownEnter 0.25s ease-out forwards; }
-        .slide-down-exit { animation: slideDownExit 0.25s ease-out forwards; }
-        
-        @keyframes slideUpEnter {
-          from { transform: translateY(100%); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
-        @keyframes slideUpExit {
-          from { transform: translateY(0); opacity: 1; }
-          to { transform: translateY(-100%); opacity: 0; }
-        }
-        @keyframes slideDownEnter {
-          from { transform: translateY(-100%); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
-        @keyframes slideDownExit {
-          from { transform: translateY(0); opacity: 1; }
-          to { transform: translateY(100%); opacity: 0; }
-        }
-      `}</style>
-      
-      {/* Current/New Time */}
-      <div 
-        className={`text-7xl font-bold font-mono tracking-tighter tabular-nums absolute inset-0 flex items-center justify-center
-          ${animationClass === 'slide-up' ? 'slide-up-enter' : ''}
-          ${animationClass === 'slide-down' ? 'slide-down-enter' : ''}
-        `}
-      >
-        {displayTime}
-      </div>
-
-      {/* Exiting/Old Time */}
-      {animatingTime && (
-        <div 
-          className={`text-7xl font-bold font-mono tracking-tighter tabular-nums absolute inset-0 flex items-center justify-center
-            ${animationClass === 'slide-up' ? 'slide-up-exit' : ''}
-            ${animationClass === 'slide-down' ? 'slide-down-exit' : ''}
-          `}
-        >
-          {animatingTime}
-        </div>
-      )}
-    </div>
-  );
+  const mStr = m.toString().padStart(2, '0');
+  const sStr = s.toString().padStart(2, '0');
+  return [mStr[0], mStr[1], ':', sStr[0], sStr[1]];
 };
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -116,92 +30,126 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   onPause,
   onReset,
   onAdjustTime,
-  destinationCode,
+  destination,
 }) => {
   const isFlying = status === FlightStatus.FLYING;
   const isPaused = status === FlightStatus.PAUSED;
   const isCompleted = status === FlightStatus.COMPLETED;
+  const isActive = isFlying || isPaused;
 
-  // Immersive Mode Logic: Fade out when flying
+  const digits = formatTimeDigits(timeLeft);
+
+  // The "Ceremony Animation" for the container fading out
   const containerClass = isFlying 
-    ? "opacity-20 hover:opacity-100 transition-opacity duration-700 delay-1000" 
+    ? "opacity-30 hover:opacity-100 transition-opacity duration-700 delay-[2000ms]" 
     : "opacity-100 transition-opacity duration-300";
 
   return (
-    <div className={`absolute bottom-0 left-0 right-0 p-8 flex flex-col items-center justify-end z-[20] pointer-events-none ${containerClass}`}>
-      {/* Container with Grain Texture & Dark Theme */}
-      <div className="bg-grain bg-[#1A1A1A]/95 backdrop-blur-md rounded-[32px] shadow-2xl p-8 w-full max-w-lg pointer-events-auto border border-white/5">
+    <div className={`w-full p-8 md:p-12 flex flex-col items-center justify-end pointer-events-none ${containerClass}`}>
+      {/* Floating UI Container */}
+      <div className="w-full max-w-2xl flex flex-col items-center">
         
-        {/* Status Header */}
-        <div className="mb-6 text-center min-h-[28px] flex items-center justify-center">
-           {isCompleted ? (
-             <h2 className="text-xl font-bold text-[#7FA4FF] animate-pulse tracking-wide">
-               🎉 已抵達目的地 {destinationCode}
-             </h2>
-           ) : (
-             <div className="flex items-center space-x-2 text-[#C8C8C8] text-sm font-medium tracking-wider uppercase">
-               <span>TPE</span>
-               <span className="text-[#757575]">✈</span>
-               <span>{destinationCode || '???'}</span>
-             </div>
-           )}
-        </div>
-
-        {/* Timer Display */}
-        <div className="flex items-center justify-center mb-8 space-x-6">
-           {(status === FlightStatus.IDLE || isPaused) && (
-             <button 
-               onClick={() => onAdjustTime(-STEP_MINUTES)}
-               className="w-12 h-12 rounded-full bg-[#1E1E1E] text-[#EDEDED] border border-white/5 active:scale-90 transition-transform duration-100 flex items-center justify-center font-bold text-lg shadow-lg touch-manipulation"
-               disabled={totalDuration <= 5 * 60}
-             >
-               -
-             </button>
-           )}
+        {/* Timer & Buttons Section */}
+        <div className="flex flex-col items-center justify-center mb-10 relative w-full">
            
-           <AnimatedTimeDisplay timeLeft={timeLeft} isFlying={isFlying} />
+           <div className="flex items-center justify-center relative w-full">
+              {/* Minus Button */}
+              {(status === FlightStatus.IDLE || isPaused) && (
+                <button 
+                  onClick={() => onAdjustTime(-STEP_MINUTES)}
+                  className="absolute left-0 md:left-8 z-[100] w-16 h-16 rounded-full text-white/30 hover:text-white hover:bg-white/10 active:scale-95 transition-all duration-300 flex items-center justify-center text-4xl font-thin cursor-pointer pointer-events-auto drop-shadow-lg"
+                  disabled={totalDuration <= 5 * 60}
+                  aria-label="Decrease time"
+                >
+                  −
+                </button>
+              )}
+              
+              {/* Timer Display - Instant Update (No Ghosting) */}
+              {/* Reduced min-width and font-size for better spacing on mobile */}
+              <div className={`relative h-40 flex items-center justify-center min-w-[240px] md:min-w-[320px] pointer-events-none select-none ${isFlying ? 'text-white/90' : 'text-white/50'}`}>
+                  <div className="text-7xl md:text-9xl font-[200] tracking-tighter tabular-nums flex items-center drop-shadow-2xl">
+                    {digits.map((char, idx) => (
+                      <span key={idx} className="w-[0.65em] text-center inline-block">
+                        {char}
+                      </span>
+                    ))}
+                  </div>
+              </div>
 
-           {(status === FlightStatus.IDLE || isPaused) && (
-             <button 
-               onClick={() => onAdjustTime(STEP_MINUTES)}
-               className="w-12 h-12 rounded-full bg-[#1E1E1E] text-[#EDEDED] border border-white/5 active:scale-90 transition-transform duration-100 flex items-center justify-center font-bold text-lg shadow-lg touch-manipulation"
-               disabled={totalDuration >= 120 * 60}
-             >
-               +
-             </button>
-           )}
+              {/* Plus Button */}
+              {(status === FlightStatus.IDLE || isPaused) && (
+                <button 
+                  onClick={() => onAdjustTime(STEP_MINUTES)}
+                  className="absolute right-0 md:right-8 z-[100] w-16 h-16 rounded-full text-white/30 hover:text-white hover:bg-white/10 active:scale-95 transition-all duration-300 flex items-center justify-center text-4xl font-thin cursor-pointer pointer-events-auto drop-shadow-lg"
+                  disabled={totalDuration >= 120 * 60}
+                  aria-label="Increase time"
+                >
+                  +
+                </button>
+              )}
+           </div>
+
+           {/* Flight Route Display (TPE - DEST) */}
+           {/* Visible only when active (Flying/Paused) and destination exists */}
+           <div className={`mt-2 h-8 flex items-center justify-center transition-all duration-700 ${isActive && destination ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
+              {destination && (
+                <div className="flex items-center space-x-3 px-4 py-1.5 rounded-full bg-white/5 border border-white/5 backdrop-blur-md shadow-lg">
+                   <span className="text-xs font-light tracking-widest text-white/70">TPE</span>
+                   <span className="text-[10px] text-white/40">✈</span>
+                   <span className="text-xs font-light tracking-widest text-white/90">{destination.code}</span>
+                   <span className="text-[10px] uppercase tracking-wider text-white/50 border-l border-white/10 pl-2 ml-1">
+                     {destination.city}
+                   </span>
+                </div>
+              )}
+           </div>
+
         </div>
 
-        {/* Main Actions */}
-        <div className="flex items-center justify-center space-x-5">
+        {/* Action Buttons */}
+        <div className="flex items-center justify-center space-x-12 pointer-events-auto">
           {!isFlying && !isPaused && (
              <button
                onClick={onStart}
-               className="px-10 py-4 bg-[#1E1E1E] text-[#EDEDED] rounded-2xl font-medium text-lg border border-white/10 shadow-lg active:scale-95 transition-transform duration-200 touch-manipulation"
+               className="group flex flex-col items-center space-y-2 opacity-80 hover:opacity-100 transition-all duration-300 cursor-pointer"
              >
-               {isCompleted ? '再次飛行' : '開始飛行'}
+               <span className="w-16 h-16 rounded-full border border-white/20 flex items-center justify-center bg-white/5 group-hover:bg-white/10 group-active:scale-95 transition-all backdrop-blur-sm shadow-lg">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="text-white ml-1"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+               </span>
+               <span className="text-xs font-light tracking-widest text-white/50 uppercase drop-shadow-md">{isCompleted ? 'Fly Again' : 'Start'}</span>
              </button>
           )}
 
           {(isFlying || isPaused) && (
             <button
               onClick={isFlying ? onPause : onStart}
-              className={`px-10 py-4 rounded-2xl font-medium text-lg border shadow-lg active:scale-95 transition-transform duration-200 touch-manipulation ${
-                isFlying 
-                ? 'bg-[#2A2A1E] text-[#FFD700] border-[#FFD700]/20' 
-                : 'bg-[#1E2A25] text-[#7FA4FF] border-[#7FA4FF]/20'
-              }`}
+              className="group flex flex-col items-center space-y-2 opacity-100 transition-all duration-300 cursor-pointer"
             >
-              {isFlying ? '暫停飛行' : '繼續飛行'}
+              {/* Highlight Pause Button for better visibility */}
+              <span className={`w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-lg group-active:scale-95 ${
+                  isFlying 
+                  ? 'bg-white text-black border-4 border-white/20 shadow-[0_0_20px_rgba(255,255,255,0.3)]' 
+                  : 'bg-white/5 border border-[#7FA4FF]/30 text-[#7FA4FF] hover:bg-white/10'
+              }`}>
+                 {isFlying ? (
+                   <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" className="text-black"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                 ) : (
+                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="text-[#7FA4FF] ml-1"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                 )}
+              </span>
+              <span className={`text-xs font-light tracking-widest uppercase drop-shadow-md ${isFlying ? 'text-white font-medium' : 'text-white/50'}`}>{isFlying ? 'Pause' : 'Resume'}</span>
             </button>
           )}
 
           <button
             onClick={onReset}
-            className="px-6 py-4 bg-transparent text-[#757575] rounded-2xl font-medium text-lg active:text-[#EDEDED] active:bg-white/5 transition-colors duration-200 touch-manipulation"
-            title="重置"
+            className="group flex flex-col items-center space-y-2 opacity-80 hover:opacity-100 transition-all duration-300 cursor-pointer"
           >
-            重置
+            <span className="w-16 h-16 rounded-full border border-white/20 flex items-center justify-center bg-white/5 group-hover:bg-white/10 group-active:scale-95 transition-all backdrop-blur-sm shadow-lg">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="text-white"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+            </span>
+            <span className="text-xs font-light tracking-widest text-white/50 uppercase drop-shadow-md">Reset</span>
           </button>
         </div>
       </div>

@@ -1,209 +1,259 @@
-import React, { useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet';
-import L from 'leaflet';
+import React, { useEffect, useRef, useState } from 'react';
+import * as d3 from 'd3';
+import * as topojson from 'topojson-client';
 import { Airport } from '../types';
 import { TAIPEI_AIRPORT, PLANE_SVG_STRING } from '../constants';
-
-// Fix for default Leaflet markers in React
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-});
 
 interface FlightMapProps {
   destination: Airport | null;
   isFlying: boolean;
-  totalDuration: number; // in seconds
-  elapsedTime: number; // in seconds
+  totalDuration: number;
+  elapsedTime: number;
 }
 
-// Dark Mode TPE Icon
-const tpeIcon = L.divIcon({
-  html: `<div class="flex items-center justify-center bg-[#2B2B2B] text-[#EDEDED] rounded-full w-8 h-8 text-[10px] font-bold border border-[#7FA4FF]/30 shadow-[0_0_10px_rgba(127,164,255,0.2)]">TPE</div>`,
-  className: 'custom-airport-marker',
-  iconSize: [32, 32],
-  iconAnchor: [16, 16],
-});
-
-// Dark Mode Destination Icon
-const destIcon = (code: string) => L.divIcon({
-  html: `<div class="flex items-center justify-center bg-[#1A1A1A] text-[#C8C8C8] rounded-full w-8 h-8 text-[10px] font-bold border border-[#404040] shadow-lg">${code}</div>`,
-  className: 'custom-airport-marker',
-  iconSize: [32, 32],
-  iconAnchor: [16, 16],
-});
-
-// Helper: Calculate bearing between two points
-const getBearing = (startLat: number, startLng: number, destLat: number, destLng: number) => {
-  const startLatRad = (startLat * Math.PI) / 180;
-  const startLngRad = (startLng * Math.PI) / 180;
-  const destLatRad = (destLat * Math.PI) / 180;
-  const destLngRad = (destLng * Math.PI) / 180;
-
-  const y = Math.sin(destLngRad - startLngRad) * Math.cos(destLatRad);
-  const x =
-    Math.cos(startLatRad) * Math.sin(destLatRad) -
-    Math.sin(startLatRad) * Math.cos(destLatRad) * Math.cos(destLngRad - startLngRad);
+const FlightMap: React.FC<FlightMapProps> = ({ destination, isFlying, totalDuration, elapsedTime }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const gRef = useRef<SVGGElement>(null); // The group that gets transformed (zoomed/panned)
+  const planeRef = useRef<SVGPathElement>(null);
   
-  const brng = (Math.atan2(y, x) * 180) / Math.PI;
-  return (brng + 360) % 360;
-};
+  const [worldData, setWorldData] = useState<any>(null);
+  const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight });
 
-// Component to handle map view and smooth animation
-const MapController: React.FC<{ 
-  destination: Airport | null; 
-  isFlying: boolean;
-  totalDuration: number;
-  elapsedTime: number; 
-}> = ({ destination, isFlying, totalDuration, elapsedTime }) => {
-  const map = useMap();
-  const markerRef = useRef<L.Marker | null>(null);
+  // Refs for animation loop
   const reqRef = useRef<number | null>(null);
   const elapsedTimeRef = useRef<number>(elapsedTime);
 
-  // Update ref when prop changes, but don't trigger re-renders of the animation loop
+  // Sync elapsed time for the animation loop
   useEffect(() => {
     elapsedTimeRef.current = elapsedTime;
   }, [elapsedTime]);
 
-  // Handle View Bounds
+  // 1. Fetch Topology Data
   useEffect(() => {
-    if (destination) {
-      const bounds = L.latLngBounds(
-        [TAIPEI_AIRPORT.coords.lat, TAIPEI_AIRPORT.coords.lng],
-        [destination.coords.lat, destination.coords.lng]
-      );
-      map.fitBounds(bounds, { padding: [80, 80], animate: true, duration: 1.5 });
-    } else {
-      map.setView([TAIPEI_AIRPORT.coords.lat, TAIPEI_AIRPORT.coords.lng], 5, { animate: true });
-    }
-  }, [map, destination]);
+    d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
+      .then((data: any) => {
+        const countries = topojson.feature(data, data.objects.countries);
+        setWorldData(countries);
+      })
+      .catch(err => console.error("Failed to load map data", err));
+  }, []);
 
-  // Animation Loop - High Precision using performance.now()
+  // 2. Handle Window Resize
   useEffect(() => {
-    if (!destination || !isFlying) {
-        // If not flying, ensure marker is at correct position based on static elapsed time
-        if (markerRef.current && destination) {
-             const progress = Math.min(1, Math.max(0, elapsedTime / totalDuration));
-             const start = TAIPEI_AIRPORT.coords;
-             const end = destination.coords;
-             const lat = start.lat + (end.lat - start.lat) * progress;
-             const lng = start.lng + (end.lng - start.lng) * progress;
-             markerRef.current.setLatLng([lat, lng]);
-        }
-        return;
-    }
-
-    const startAnimationTime = performance.now();
-    const startElapsed = elapsedTimeRef.current; 
-
-    const animate = (time: number) => {
-      if (!markerRef.current) return;
-
-      // Calculate highly precise elapsed time
-      // We rely on performance.now() delta added to the snapshot of elapsed time when animation started
-      const deltaSeconds = (time - startAnimationTime) / 1000;
-      const preciseElapsed = startElapsed + deltaSeconds;
-
-      // Calculate progress (0 to 1)
-      const progress = Math.min(1, Math.max(0, preciseElapsed / totalDuration));
-
-      // Interpolate Position
-      const start = TAIPEI_AIRPORT.coords;
-      const end = destination.coords;
-      
-      const lat = start.lat + (end.lat - start.lat) * progress;
-      const lng = start.lng + (end.lng - start.lng) * progress;
-
-      // Update Marker
-      markerRef.current.setLatLng([lat, lng]);
-
-      // Calculate Rotation
-      const bearing = getBearing(start.lat, start.lng, end.lat, end.lng);
-      
-      // Update rotation via DOM transform on icon
-      const iconDiv = markerRef.current.getElement()?.querySelector('div');
-      if (iconDiv) {
-         iconDiv.style.transform = `rotate(${bearing}deg)`;
-      }
-
-      if (progress < 1) {
-         reqRef.current = requestAnimationFrame(animate);
+    const handleResize = () => {
+      if (containerRef.current) {
+        setDimensions({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight
+        });
       }
     };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
-    reqRef.current = requestAnimationFrame(animate);
+  // 3. D3 Drawing Logic
+  useEffect(() => {
+    if (!worldData || !svgRef.current || !gRef.current) return;
 
+    const svg = d3.select(svgRef.current);
+    const g = d3.select(gRef.current);
+
+    // --- Projection Setup ---
+    // Start Centered on TAIPEI (TPE)
+    const initialScale = Math.min(dimensions.width, dimensions.height) * 1.5; 
+    
+    const projection = d3.geoMercator()
+      .center([TAIPEI_AIRPORT.coords.lng, TAIPEI_AIRPORT.coords.lat])
+      .scale(initialScale)
+      .translate([dimensions.width / 2, dimensions.height / 2]);
+
+    const pathGenerator = d3.geoPath().projection(projection);
+
+    // --- Zoom Behavior ---
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.5, 8]) // Zoom limits
+      .on('zoom', (event) => {
+        g.attr('transform', event.transform);
+      });
+
+    // Attach zoom to the parent SVG
+    svg.call(zoom);
+
+    // --- Draw Static Map Elements ---
+    g.selectAll("*").remove(); // Clear previous
+
+    // Land
+    g.append("g")
+      .selectAll("path")
+      .data(worldData.features)
+      .enter()
+      .append("path")
+      .attr("d", pathGenerator as any)
+      .attr("fill", "#1A1A1A")
+      .attr("stroke", "#262626")
+      .attr("stroke-width", 0.5);
+
+    // TPE Marker (Origin)
+    const tpePos = projection([TAIPEI_AIRPORT.coords.lng, TAIPEI_AIRPORT.coords.lat]);
+    if (tpePos) {
+      g.append("circle")
+        .attr("cx", tpePos[0])
+        .attr("cy", tpePos[1])
+        .attr("r", 4)
+        .attr("fill", "#7FA4FF")
+        .attr("fill-opacity", 0.8)
+        .attr("stroke", "#7FA4FF")
+        .attr("stroke-width", 1)
+        .attr("stroke-opacity", 0.3);
+
+      g.append("text")
+        .attr("x", tpePos[0] + 10)
+        .attr("y", tpePos[1] + 4)
+        .text("TPE")
+        .attr("fill", "#7FA4FF")
+        .attr("font-size", "12px")
+        .attr("font-family", "Inter, sans-serif")
+        .attr("font-weight", "500")
+        .style("pointer-events", "none");
+    }
+
+    // --- Draw Flight Elements ---
+    if (destination) {
+      const destPos = projection([destination.coords.lng, destination.coords.lat]);
+      
+      // Destination Marker
+      if (destPos) {
+        g.append("circle")
+          .attr("cx", destPos[0])
+          .attr("cy", destPos[1])
+          .attr("r", 4)
+          .attr("fill", "#EDEDED")
+          .attr("fill-opacity", 0.6);
+
+        g.append("text")
+          .attr("x", destPos[0] + 10)
+          .attr("y", destPos[1] + 4)
+          .text(destination.code)
+          .attr("fill", "#EDEDED")
+          .attr("font-size", "12px")
+          .attr("font-family", "Inter, sans-serif")
+          .attr("font-weight", "300")
+          .attr("opacity", 0.7)
+          .style("pointer-events", "none");
+      }
+
+      // Flight Path (Curved)
+      const link = {
+        type: "LineString",
+        coordinates: [
+          [TAIPEI_AIRPORT.coords.lng, TAIPEI_AIRPORT.coords.lat],
+          [destination.coords.lng, destination.coords.lat]
+        ]
+      };
+
+      g.append("path")
+        .datum(link)
+        .attr("d", pathGenerator as any)
+        .attr("fill", "none")
+        .attr("stroke", "#EDEDED")
+        .attr("stroke-width", 1.5)
+        .attr("stroke-opacity", 0.2)
+        .attr("stroke-dasharray", "4,6");
+
+      // Plane Icon - Use the SVG string from constants but parse it
+      // For cleaner D3 implementation, we recreate the path logic here
+      // matching the NEW simple triangle plane in constants.ts
+      const plane = g.append("path")
+        .attr("d", "M12 2L2 22L12 18L22 22L12 2Z") // Matches PLANE_SVG_STRING geometry
+        .attr("fill", "#EDEDED")
+        .attr("stroke", "#0F0F0F")
+        .attr("stroke-width", 1.5)
+        .style("filter", "drop-shadow(0px 0px 8px rgba(255, 255, 255, 0.4))");
+      
+      // @ts-ignore
+      planeRef.current = plane.node();
+
+      // Setup Interpolator for animation
+      const interpolator = d3.geoInterpolate(
+        [TAIPEI_AIRPORT.coords.lng, TAIPEI_AIRPORT.coords.lat],
+        [destination.coords.lng, destination.coords.lat]
+      );
+
+      // --- Animation Loop ---
+      const startAnimTime = performance.now();
+      const startElapsed = elapsedTimeRef.current;
+
+      const animate = (time: number) => {
+        if (!planeRef.current) return;
+
+        let progress = 0;
+        
+        if (isFlying) {
+           const deltaSeconds = (time - startAnimTime) / 1000;
+           const preciseElapsed = startElapsed + deltaSeconds;
+           progress = Math.min(1, Math.max(0, preciseElapsed / totalDuration));
+        } else {
+           progress = Math.min(1, Math.max(0, elapsedTimeRef.current / totalDuration));
+        }
+
+        // Calculate Position on Projected Path
+        const posCoords = interpolator(progress);
+        const pPos = projection(posCoords);
+
+        if (pPos) {
+          // Calculate Heading
+          const nextCoords = interpolator(Math.min(1, progress + 0.01)); // Look ahead slightly
+          const nextPos = projection(nextCoords);
+          let angle = 0;
+          if (nextPos) {
+             const dx = nextPos[0] - pPos[0];
+             const dy = nextPos[1] - pPos[1];
+             // Math.atan2(y, x) gives angle in radians from X-axis (Right).
+             // 0 deg = Right.
+             // Our plane icon points UP (North).
+             // If moving Right (0 deg), we need to rotate plane 90 deg clockwise.
+             // So: Angle + 90.
+             angle = Math.atan2(dy, dx) * 180 / Math.PI + 90; 
+          }
+
+          d3.select(planeRef.current)
+            .attr("transform", `translate(${pPos[0]}, ${pPos[1]}) rotate(${angle}) scale(0.6) translate(-12, -12)`);
+        }
+
+        if (isFlying && progress < 1) {
+          reqRef.current = requestAnimationFrame(animate);
+        }
+      };
+
+      reqRef.current = requestAnimationFrame(animate);
+
+    } else {
+      // @ts-ignore
+      planeRef.current = null;
+    }
+
+    // Cleanup
     return () => {
       if (reqRef.current) cancelAnimationFrame(reqRef.current);
+      svg.on('.zoom', null);
     };
-  }, [isFlying, destination, totalDuration]); // removed elapsedTime to prevent stuttering on 1s updates
 
-  // Initial Marker Setup
-  useEffect(() => {
-    if (!markerRef.current) {
-        const marker = L.marker([TAIPEI_AIRPORT.coords.lat, TAIPEI_AIRPORT.coords.lng], {
-            icon: L.divIcon({
-                html: `<div style="transition: transform 0.2s linear; filter: drop-shadow(0 0 5px rgba(255,255,255,0.2));">${PLANE_SVG_STRING}</div>`,
-                className: 'plane-icon-container',
-                iconSize: [20, 20], // Reduced size 50%
-                iconAnchor: [10, 10] // Center anchor
-            }),
-            zIndexOffset: 1000
-        });
-        marker.addTo(map);
-        markerRef.current = marker;
-    }
-    return () => {
-        if (markerRef.current) {
-            markerRef.current.remove();
-            markerRef.current = null;
-        }
-    }
-  }, [map]);
-
-  return null;
-};
-
-const FlightMap: React.FC<FlightMapProps> = ({ destination, isFlying, totalDuration, elapsedTime }) => {
-  const start = TAIPEI_AIRPORT.coords;
-  const end = destination ? destination.coords : null;
+  }, [worldData, dimensions, destination, isFlying, totalDuration]);
 
   return (
-    <MapContainer 
-      center={[start.lat, start.lng]} 
-      zoom={5} 
-      scrollWheelZoom={false}
-      zoomControl={false}
-      style={{ height: '100%', width: '100%', background: '#0F0F0F' }}
-    >
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-      />
-      
-      <Marker position={[start.lat, start.lng]} icon={tpeIcon} />
-      
-      {end && (
-        <>
-          <Marker position={[end.lat, end.lng]} icon={destIcon(destination!.code)} />
-          <Polyline 
-            positions={[[start.lat, start.lng], [end.lat, end.lng]]} 
-            pathOptions={{ color: '#EDEDED', weight: 1.5, dashArray: '8, 12', opacity: 0.3 }} 
-          />
-        </>
-      )}
-
-      <MapController 
-        destination={destination} 
-        isFlying={isFlying} 
-        totalDuration={totalDuration} 
-        elapsedTime={elapsedTime} 
-      />
-      
-    </MapContainer>
+    <div ref={containerRef} className="w-full h-full bg-[#0F0F0F] relative overflow-hidden">
+      <svg 
+        ref={svgRef} 
+        width="100%" 
+        height="100%" 
+        className="block touch-none cursor-move"
+        style={{ width: '100%', height: '100%' }}
+      >
+        <g ref={gRef}></g>
+      </svg>
+    </div>
   );
 };
 

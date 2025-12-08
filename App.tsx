@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import FlightMap from './components/FlightMap';
 import ControlPanel from './components/ControlPanel';
@@ -99,29 +100,22 @@ const App: React.FC = () => {
     }
   };
 
-  // Timer Logic - Updates FlightState every second for the UI
-  // Note: Fluid map animation is handled inside FlightMap using requestAnimationFrame
+  // Timer Logic
   useEffect(() => {
     if (flightState.status === FlightStatus.FLYING) {
       timerRef.current = window.setInterval(() => {
         setFlightState(prev => {
           if (prev.elapsedTime >= prev.totalDuration) {
-            // Completed
             if (timerRef.current) clearInterval(timerRef.current);
             audioService.stop();
             return { ...prev, status: FlightStatus.COMPLETED, elapsedTime: prev.totalDuration };
           }
-          
-          return {
-            ...prev,
-            elapsedTime: prev.elapsedTime + 1,
-          };
+          return { ...prev, elapsedTime: prev.elapsedTime + 1 };
         });
       }, 1000);
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
     }
-
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -139,9 +133,12 @@ const App: React.FC = () => {
   const timeLeft = Math.max(0, flightState.totalDuration - flightState.elapsedTime);
 
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-[#0F0F0F] text-[#EDEDED] font-sans selection:bg-[#7FA4FF] selection:text-[#0F0F0F]">
+    <div className="relative w-screen h-screen overflow-hidden bg-[#0F0F0F] font-sans text-[#EDEDED]">
       
-      {/* Background Map */}
+      {/* 
+         LAYER 1: MAP BACKGROUND 
+         Absolute inset-0, Z-0. This sits at the very bottom.
+      */}
       <div className="absolute inset-0 z-0">
         <FlightMap 
           destination={flightState.destination} 
@@ -151,34 +148,56 @@ const App: React.FC = () => {
         />
       </div>
 
-      {/* Dark Vignette Overlay */}
-      <div className="absolute inset-0 pointer-events-none z-10 bg-gradient-to-b from-black/60 via-transparent to-black/80" />
+      {/* 
+         LAYER 1.5: VIGNETTE
+         Adds visual depth, sits between map and UI.
+      */}
+      <div className="absolute inset-0 z-10 pointer-events-none bg-gradient-to-b from-black/30 via-transparent to-black/80" />
 
-      {/* Announcement Overlay */}
-      <Announcement 
-        destination={flightState.destination} 
-        durationMinutes={Math.floor(flightState.totalDuration / 60)} 
-        show={showAnnouncement}
-      />
+      {/* 
+         LAYER 2: FOREGROUND UI CONTAINER
+         Absolute inset-0, Z-50.
+         IMPORTANT: pointer-events-none ensures clicks pass through to map drag events where there is no UI.
+         We use Flexbox to position the top (Announcement/Menu) and bottom (ControlPanel) elements.
+      */}
+      <div className="absolute inset-0 z-50 pointer-events-none flex flex-col justify-between">
+        
+        {/* TOP SECTION: Menu & Announcement */}
+        <div className="relative w-full">
+            {/* Announcement Overlay (Centered/Top) */}
+             <Announcement 
+              destination={flightState.destination} 
+              durationMinutes={Math.floor(flightState.totalDuration / 60)} 
+              show={showAnnouncement}
+            />
+            
+            {/* Noise Menu (Top Right) - Re-enable pointers! */}
+            <div className="absolute top-0 right-0 pointer-events-auto">
+                <NoiseMenu 
+                  currentNoise={currentNoise}
+                  onNoiseChange={handleNoiseChange}
+                  visible={flightState.status === FlightStatus.FLYING}
+                />
+            </div>
+        </div>
 
-      {/* Noise Menu */}
-      <NoiseMenu 
-        currentNoise={currentNoise}
-        onNoiseChange={handleNoiseChange}
-        visible={flightState.status === FlightStatus.FLYING}
-      />
+        {/* BOTTOM SECTION: Control Panel */}
+        {/* The ControlPanel component itself has internal pointer-events logic, but we wrap it cleanly here */}
+        <div className="w-full">
+            <ControlPanel 
+              status={flightState.status}
+              timeLeft={timeLeft}
+              totalDuration={flightState.totalDuration}
+              onStart={handleStart}
+              onPause={handlePause}
+              onReset={handleReset}
+              onAdjustTime={handleAdjustTime}
+              destination={flightState.destination}
+            />
+        </div>
 
-      {/* Main UI */}
-      <ControlPanel 
-        status={flightState.status}
-        timeLeft={timeLeft}
-        totalDuration={flightState.totalDuration}
-        onStart={handleStart}
-        onPause={handlePause}
-        onReset={handleReset}
-        onAdjustTime={handleAdjustTime}
-        destinationCode={flightState.destination?.code || null}
-      />
+      </div>
+
     </div>
   );
 };
